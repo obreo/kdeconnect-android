@@ -7,36 +7,22 @@ package org.kde.kdeconnect.plugins.telephony
 
 import android.Manifest
 import android.app.Activity
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
-import android.media.AudioAttributes
 import android.media.AudioManager
-import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.preference.PreferenceManager
-import android.provider.Settings
 import android.telephony.PhoneNumberUtils
 import android.telephony.TelephonyManager
-import android.util.Base64
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import org.kde.kdeconnect.DeviceType
 import org.kde.kdeconnect.helpers.ContactsHelper
-import org.kde.kdeconnect.helpers.NotificationHelper
 import org.kde.kdeconnect.NetworkPacket
 import org.kde.kdeconnect.plugins.Plugin
 import org.kde.kdeconnect.plugins.PluginFactory.LoadablePlugin
@@ -53,15 +39,11 @@ class TelephonyPlugin : Plugin() {
     private var lastPacket: NetworkPacket? = null
     private var isMuted = false
 
-    // --- Call mirroring (phone-to-phone) state ---
-    // onPacketReceived runs on the link's read thread, while plugin (un)loading can run on
-    // a worker thread, so every state change below is confined to the main thread.
+    // --- Call mirroring (phone-to-phone) ---
+    // onPacketReceived runs on the link's read thread, while plugin (un)loading can run on a
+    // worker thread. The mirroring state itself lives in MirroredCallSession on the main
+    // thread, so it survives this instance being destroyed and replaced on a reconnect.
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var mirroredState = MIRROR_IDLE
-    private var mirroredCall: MirroredCall? = null
-    private var pendingMissedCall: MirroredCall? = null
-    private var ringtonePlayer: MediaPlayer? = null
-    private var callStateListener: CallStateListener? = null
 
     private val receiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent) {
@@ -95,7 +77,10 @@ class TelephonyPlugin : Plugin() {
             override fun onReceive(context: Context, intent: Intent) {
                 val isCancel = intent.getStringExtra("isCancel") == "true"
                 mainHandler.post {
-                    handleMirroredCallEvent(
+                    MirroredCallSession.handleCallEvent(
+                        context,
+                        device.deviceId,
+                        device.name,
                         intent.getStringExtra("event") ?: "",
                         isCancel,
                         intent.getStringExtra("contactName"),
@@ -220,6 +205,8 @@ class TelephonyPlugin : Plugin() {
     }
 
     // --- Call mirroring receiver side ---
+    // The state machine lives in MirroredCallSession (process-wide), not in this instance:
+    // a mirrored call outlives its plugin instance if the link drops and comes back.
 
     /**
      * A call incoming on the paired device, to be mirrored on this one.
@@ -238,238 +225,15 @@ class TelephonyPlugin : Plugin() {
      * Only one listener at a time; it is called on the main thread.
      */
     fun setCallStateListener(listener: CallStateListener?) {
-        mainHandler.post { callStateListener = listener }
+        MirroredCallSession.setCallStateListener(listener)
     }
 
-    fun isMirroringIncomingCall(): Boolean = mirroredState == MIRROR_RINGING
+    fun isMirroringIncomingCall(): Boolean = MirroredCallSession.isRinging(device.deviceId)
 
-    fun currentMirroredCall(): MirroredCall? = mirroredCall
+    fun currentMirroredCall(): MirroredCall? = MirroredCallSession.currentCall()
 
     fun stopCallMirror(recordMissed: Boolean = false) {
-        mainHandler.post { stopCallMirrorOnMain(recordMissed) }
-    }
-
-    private fun handleMirroredCallEvent(event: String, isCancel: Boolean, contactName: String?, phoneNumber: String?, thumbnail: String?) {
-        // Any event other than a new incoming call must stop the mirroring immediately, so
-        // that the notification on this device automatically goes away when the call is
-        // picked up or ends on the phone with the SIM card.
-        if (isCancel) {
-            stopCallMirrorOnMain(recordMissed = true)
-            return
-        }
-
-        when (event) {
-            "ringing" -> startCallMirror(MirroredCall(contactName, phoneNumber, thumbnail))
-            "talking" -> stopCallMirrorOnMain(recordMissed = false) // Picked up on the other device
-            "missedCall" -> postMissedCallNotification()
-        }
-    }
-
-    private fun startCallMirror(call: MirroredCall) {
-        // A previous mirrored call (e.g. a second incoming call) must not keep ringing
-        if (mirroredState == MIRROR_RINGING) {
-            stopCallMirrorOnMain(recordMissed = false)
-        }
-
-        mirroredCall = call
-        mirroredState = MIRROR_RINGING
-        pendingMissedCall = null
-
-        startRingtone()
-        startVibration()
-        postCallNotification(call)
-        mainHandler.postDelayed(ringingTimeout, MIRROR_RINGING_TIMEOUT_MS)
-        dispatchCallState()
-    }
-
-    private fun stopCallMirrorOnMain(recordMissed: Boolean) {
-        if (recordMissed && mirroredState == MIRROR_RINGING) {
-            pendingMissedCall = mirroredCall
-        }
-        mainHandler.removeCallbacks(ringingTimeout)
-        if (mirroredState != MIRROR_RINGING) {
-            return
-        }
-        mirroredState = MIRROR_IDLE
-        mirroredCall = null
-
-        stopRingtone()
-        stopVibration()
-        NotificationManagerCompat.from(context).cancel(callNotificationId(device.deviceId))
-        dispatchCallState()
-    }
-
-    private fun dispatchCallState() {
-        callStateListener?.onMirroredCallStateChanged(mirroredState == MIRROR_RINGING, mirroredCall)
-    }
-
-    private val ringingTimeout = Runnable {
-        // Safety net: the cancel packet should always arrive, but if it was lost on a flaky
-        // link stop the mirror on our own (carrier ringing always ends sooner anyway).
-        Log.i("TelephonyPlugin", "Mirrored call timed out, stopping the mirror")
-        stopCallMirrorOnMain(recordMissed = true)
-    }
-
-    private fun postCallNotification(call: MirroredCall) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !isPermissionGranted(Manifest.permission.POST_NOTIFICATIONS)) {
-            Log.i("TelephonyPlugin", "No permission to post notifications, mirrored call will only be audible")
-            return
-        }
-
-        val contentIntent = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, TelephonyCallActivity::class.java).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                putExtra(TelephonyCallActivity.EXTRA_DEVICE_ID, device.deviceId)
-                putExtra(TelephonyCallActivity.EXTRA_CALLER_NAME, call.name)
-                putExtra(TelephonyCallActivity.EXTRA_CALLER_NUMBER, call.number)
-                putExtra(TelephonyCallActivity.EXTRA_CALLER_THUMBNAIL, call.thumbnail)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val stopIntent = PendingIntent.getBroadcast(
-            context,
-            1,
-            Intent(context, TelephonyCallReceiver::class.java).apply {
-                action = TelephonyCallReceiver.ACTION_STOP_CALL_MIRROR
-                putExtra(TelephonyCallReceiver.EXTRA_DEVICE_ID, device.deviceId)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val builder = NotificationCompat.Builder(context, NotificationHelper.Channels.INCOMING_CALL)
-            .setSmallIcon(R.drawable.ic_telephony_call_24dp)
-            .setContentTitle(context.getString(R.string.telephony_call_incoming))
-            .setContentText(call.displayName)
-            .setSubText(device.name)
-            .setStyle(
-                NotificationCompat.BigTextStyle()
-                    .bigText(listOfNotNull(call.displayName, context.getString(R.string.telephony_call_via, device.name)).joinToString("\n")),
-            )
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            // The user can dismiss it (which stops the ringtone via the delete intent), but
-            // tapping it opens the call screen without cancelling the notification.
-            .setOngoing(false)
-            .setAutoCancel(false)
-            // The channel is silent: the ringtone and vibration are driven by this plugin.
-            .setOnlyAlertOnce(true)
-            .setContentIntent(contentIntent)
-            .setDeleteIntent(stopIntent)
-            .addAction(0, context.getString(R.string.telephony_call_stop_ringing), stopIntent)
-
-        call.thumbnail?.let { thumbnail ->
-            try {
-                val bytes = Base64.decode(thumbnail, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.let { builder.setLargeIcon(it) }
-            } catch (e: Exception) {
-                Log.e("TelephonyPlugin", "Failed to decode the contact photo of a mirrored call")
-            }
-        }
-
-        if (canUseFullScreenIntent()) {
-            builder.setFullScreenIntent(contentIntent, true)
-        }
-
-        try {
-            NotificationManagerCompat.from(context).notify(callNotificationId(device.deviceId), builder.build())
-        } catch (e: SecurityException) {
-            // POST_NOTIFICATIONS was revoked meanwhile: keep the audible ringing anyway
-            Log.e("TelephonyPlugin", "Failed to post the mirrored call notification", e)
-        }
-    }
-
-    private fun canUseFullScreenIntent(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            return true
-        }
-        return ContextCompat.getSystemService(context, NotificationManager::class.java)?.canUseFullScreenIntent() ?: false
-    }
-
-    private fun postMissedCallNotification() {
-        val call = pendingMissedCall ?: return
-        pendingMissedCall = null
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !isPermissionGranted(Manifest.permission.POST_NOTIFICATIONS)) {
-            return
-        }
-
-        val notification = NotificationCompat.Builder(context, NotificationHelper.Channels.DEFAULT)
-            .setSmallIcon(R.drawable.ic_telephony_call_24dp)
-            .setContentTitle(context.getString(R.string.telephony_call_missed, call.displayName))
-            .setSubText(device.name)
-            .setAutoCancel(true)
-            .setSound(null)
-            .build()
-
-        try {
-            NotificationManagerCompat.from(context).notify(System.currentTimeMillis().toInt(), notification)
-        } catch (e: SecurityException) {
-            Log.e("TelephonyPlugin", "Failed to post the missed call notification", e)
-        }
-    }
-
-    private fun callNotificationId(deviceId: String): Int = 0x51A00 + (deviceId.hashCode() and 0xFF)
-
-    private fun startRingtone() {
-        stopRingtone()
-        try {
-            val player = MediaPlayer()
-            player.setDataSource(context, Settings.System.DEFAULT_RINGTONE_URI)
-            player.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    // Like a real incoming call: audible even when the phone is silenced
-                    .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
-                    .build(),
-            )
-            player.setWakeMode(context, PowerManager.SCREEN_DIM_WAKE_LOCK)
-            player.setLooping(true)
-            player.prepare()
-            player.start()
-            ringtonePlayer = player
-        } catch (e: Exception) {
-            Log.e("TelephonyPlugin", "Failed to play the ringtone for a mirrored call", e)
-        }
-    }
-
-    private fun stopRingtone() {
-        ringtonePlayer?.let { player ->
-            try {
-                if (player.isPlaying) player.stop()
-            } catch (e: Exception) {
-                // Already stopped or released
-            }
-            player.release()
-        }
-        ringtonePlayer = null
-    }
-
-    private fun startVibration() {
-        val vibrator = getVibrator() ?: return
-        val pattern = longArrayOf(0, 500, 800)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0))
-        } else {
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(pattern, 0)
-        }
-    }
-
-    private fun stopVibration() {
-        getVibrator()?.cancel()
-    }
-
-    private fun getVibrator(): Vibrator? {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.getSystemService(context, VibratorManager::class.java)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            ContextCompat.getSystemService(context, Vibrator::class.java)
-        }
+        MirroredCallSession.stop(context, device.deviceId, recordMissed)
     }
 
     override val permissionExplanation: Int = R.string.telephony_permission_explanation
@@ -477,6 +241,12 @@ class TelephonyPlugin : Plugin() {
     override val optionalPermissionExplanation: Int = R.string.telephony_optional_permission_explanation
 
     override fun onCreate(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // Declare the self-managed phone account whose ConnectionService draws the system
+            // incoming-call UI for mirrored calls. Registering it repeatedly is harmless.
+            MirroredCallTelecom.registerAccount(context)
+        }
+
         val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
         filter.priority = 500
         context.registerReceiver(receiver, filter)
@@ -485,7 +255,9 @@ class TelephonyPlugin : Plugin() {
         if (debugReceiver != null) {
             val debugFilter = IntentFilter(ACTION_DEBUG_CALL_MIRROR)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(debugReceiver, debugFilter, Context.RECEIVER_NOT_EXPORTED)
+                // Exported so "adb shell am broadcast" can reach it; only ever registered in
+                // debug builds (debugReceiver is null in release), so release builds stay shut.
+                context.registerReceiver(debugReceiver, debugFilter, Context.RECEIVER_EXPORTED)
             } else {
                 context.registerReceiver(debugReceiver, debugFilter)
             }
@@ -496,18 +268,16 @@ class TelephonyPlugin : Plugin() {
     override fun onDestroy() {
         context.unregisterReceiver(receiver)
         debugReceiver?.let { context.unregisterReceiver(it) }
-        mainHandler.post {
-            mainHandler.removeCallbacks(ringingTimeout)
-            stopRingtone()
-            stopVibration()
-            callStateListener = null
-        }
+        // A mirror which is mid-ring is deliberately left alone here: plugin (un)loading is
+        // driven by link connectivity, and a call must keep mirroring across a reconnect.
+        // MirroredCallSession owns it and stops it on the cancel event, a user action or
+        // its own timeout.
     }
 
     override fun onDeviceUnpaired(context: Context, deviceId: String) {
-        // This may be called on a freshly created instance which never ran onCreate(), so only
-        // do things that are safe on it: cancel the (possibly lingering) notification by id.
-        NotificationManagerCompat.from(context).cancel(callNotificationId(deviceId))
+        // This may be called on a freshly created instance or off the main thread, so just
+        // hand it to the session (which is safe for devices with no active mirror).
+        mainHandler.post { MirroredCallSession.deviceUnpaired(context, deviceId) }
     }
 
     override fun onPacketReceived(np: NetworkPacket): Boolean {
@@ -522,7 +292,18 @@ class TelephonyPlugin : Plugin() {
                     val contactName = np.getStringOrNull("contactName")
                     val phoneNumber = np.getStringOrNull("phoneNumber")
                     val thumbnail = np.getStringOrNull("phoneThumbnail")
-                    mainHandler.post { handleMirroredCallEvent(event, isCancel, contactName, phoneNumber, thumbnail) }
+                    mainHandler.post {
+                        MirroredCallSession.handleCallEvent(
+                            context,
+                            device.deviceId,
+                            device.name,
+                            event,
+                            isCancel,
+                            contactName,
+                            phoneNumber,
+                            thumbnail,
+                        )
+                    }
                 }
             }
         }
@@ -596,9 +377,5 @@ class TelephonyPlugin : Plugin() {
         private const val KEY_PREF_BLOCKED_NUMBERS = "telephony_blocked_numbers"
 
         private const val ACTION_DEBUG_CALL_MIRROR = "org.kde.kdeconnect_tp.DEBUG_CALL_MIRROR"
-
-        private const val MIRROR_IDLE = 0
-        private const val MIRROR_RINGING = 1
-        private const val MIRROR_RINGING_TIMEOUT_MS = 120000L
     }
 }

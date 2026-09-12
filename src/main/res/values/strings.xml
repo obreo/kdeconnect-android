@@ -415,6 +415,7 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
     <string name="telephony_call_stop_ringing">Stop ringing</string>
     <string name="telephony_call_missed">Missed call: %1$s</string>
     <string name="telephony_call_no_answer">Unknown</string>
+    <string name="telephony_call_control_on_other">Calls must be answered on %1$s</string>
     <string name="mpris_coverart_description">Cover art of current media</string>
     <string name="settings_icon_description">Settings icon</string>
 
