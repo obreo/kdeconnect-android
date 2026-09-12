@@ -10,6 +10,12 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
     xmlns:android="http://schemas.android.com/apk/res/android"
     tools:keep="@xml/telephonyplugin_preferences">
 
+    <SwitchPreference
+        android:defaultValue="false"
+        android:key="@string/telephony_preference_key_mirror_calls"
+        android:summary="@string/telephony_pref_mirror_calls_summary"
+        android:title="@string/telephony_pref_mirror_calls_title" />
+
     <EditTextPreference
         android:dialogMessage="@string/telephony_pref_blocked_dialog_desc"
         android:key="telephony_blocked_numbers"

@@ -54,11 +54,20 @@ object NotificationHelper {
             .setLightsEnabled(false)
             .setSound(null, null)
             .build()
+        /* For calls mirrored from another device. The notification is silent and vibration-free */
+        /* on purpose: the ringing sound and vibration are driven by the telephony plugin itself  */
+        /* (a looping MediaPlayer on the ringer stream), so that the ring keeps playing until the */
+        /* call is answered or ends on the source device, and stops when the user dismisses it.   */
+        val incomingCallChannel = NotificationChannelCompat.Builder(Channels.INCOMING_CALL, NotificationManagerCompat.IMPORTANCE_HIGH)
+            .setName(context.getString(R.string.notification_channel_incoming_call))
+            .setVibrationEnabled(false)
+            .setSound(null, null)
+            .build()
         val channels = listOf(
             persistentChannel,
             defaultChannel, mediaChannel, fileTransferDownloadChannel, fileTransferDownloadCompleteChannel, fileTransferUploadChannel,
             fileTransferErrorChannel, receiveNotificationChannel, highPriorityChannel,
-            continueWatchingChannel
+            continueWatchingChannel, incomingCallChannel
         )
 
         val nm = NotificationManagerCompat.from(context)
@@ -96,5 +105,6 @@ object NotificationHelper {
         const val RECEIVENOTIFICATION: String = "receive"
         const val HIGHPRIORITY: String = "highpriority"
         const val CONTINUEWATCHING: String = "continuewatching"
+        const val INCOMING_CALL: String = "incoming_call"
     }
 }

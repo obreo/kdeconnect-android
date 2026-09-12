@@ -200,6 +200,23 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
             </intent-filter>
         </receiver>
 
+        <activity
+            android:name="org.kde.kdeconnect.plugins.telephony.TelephonyCallActivity"
+            android:configChanges="orientation|screenSize"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:label="@string/telephony_call_incoming"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true" />
+
+        <receiver android:name="org.kde.kdeconnect.plugins.telephony.TelephonyCallReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="org.kde.kdeconnect.plugins.telephony.stopCallMirror" />
+            </intent-filter>
+        </receiver>
+
         <!-- Plugin-related activities and services -->
 
         <activity

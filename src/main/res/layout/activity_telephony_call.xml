@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+SPDX-FileCopyrightText: 2026 KDE Connect contributors
+
+SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
+-->
+
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="@dimen/activity_horizontal_margin"
+    tools:context="org.kde.kdeconnect.plugins.telephony.TelephonyCallActivity">
+
+    <TextView
+        android:id="@+id/tvCallHeader"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/telephony_call_incoming"
+        android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+    <ImageView
+        android:id="@+id/ivCallerThumbnail"
+        android:layout_width="128dp"
+        android:layout_height="128dp"
+        android:layout_marginTop="24dp"
+        android:background="@drawable/circle_avatar_background"
+        android:contentDescription="@string/telephony_call_incoming"
+        android:padding="24dp"
+        android:src="@drawable/ic_device_phone_32dp" />
+
+    <TextView
+        android:id="@+id/tvCallerName"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        tools:text="Alice" />
+
+    <TextView
+        android:id="@+id/tvCallerNumber"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textSize="16sp"
+        tools:text="+1 555 123 4567" />
+
+    <TextView
+        android:id="@+id/tvViaDevice"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        tools:text="via Phone A" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/bStopRinging"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="48dp"
+        android:text="@string/telephony_call_stop_ringing" />
+
+</LinearLayout>
