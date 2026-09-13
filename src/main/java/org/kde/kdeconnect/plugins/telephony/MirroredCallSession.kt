@@ -28,6 +28,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.content.ContextCompat
+import com.google.android.material.color.MaterialColors
 import org.kde.kdeconnect.helpers.NotificationHelper
 import org.kde.kdeconnect_tp.R
 
@@ -53,6 +54,7 @@ object MirroredCallSession {
     private const val MIRROR_RINGING = 1
     private const val MIRROR_RINGING_TIMEOUT_MS = 120000L
     private const val CALL_STYLE_RETRY_DELAY_MS = 1500L
+    private const val FALLBACK_ACTION_COLOR = 0xFF1B1B1F.toInt() // Material 3 onSurface, light scheme
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -149,14 +151,11 @@ object MirroredCallSession {
         startVibration(context)
         var telecomCallAdded = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Add the call to telecom (the way WhatsApp does): the system then draws the
-            // incoming-call UI over the lock screen without the "full screen notifications"
-            // permission, which Android 14+ restricts to calling apps.
+            // Add the call to telecom (the way WhatsApp does): the system then treats the
+            // mirror as a real call for audio, display and the call-style notification.
             MirroredCallTelecom.onUiDismissed = { stopOnMain(context, recordMissed = true) }
             telecomCallAdded = MirroredCallTelecom.start(context, incoming, deviceName)
         }
-        // Post the notification afterwards: on Android 12+ it is the CallStyle counterpart of
-        // the telecom call, and the platform only accepts it while that call exists.
         postCallNotification(context, incoming, telecomCallAdded)
 
         // Safety net: the cancel packet should always arrive, but if it was lost on a flaky
@@ -176,16 +175,20 @@ object MirroredCallSession {
         }
         ringingTimeout?.let { mainHandler.removeCallbacks(it) }
         ringingTimeout = null
+
+        // Tear the ringing down unconditionally, even if the session already considers itself
+        // idle: a stop request must never leave a looping vibration, a live telecom call or a
+        // stale notification behind, and every step here is idempotent.
+        stopRingtone()
+        stopVibration(context)
+        MirroredCallTelecom.stop()
+        deviceId?.let { NotificationManagerCompat.from(context).cancel(callNotificationId(it)) }
+
         if (state != MIRROR_RINGING) {
             return
         }
         state = MIRROR_IDLE
         call = null
-
-        stopRingtone()
-        stopVibration(context)
-        MirroredCallTelecom.stop()
-        deviceId?.let { NotificationManagerCompat.from(context).cancel(callNotificationId(it)) }
         dispatchCallState()
     }
 
@@ -244,7 +247,19 @@ object MirroredCallSession {
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)
             .setDeleteIntent(stopIntent)
-            .addAction(0, context.getString(R.string.telephony_call_stop_ringing), stopIntent)
+            .addAction(
+                NotificationCompat.Action.Builder(
+                    R.drawable.ic_call_end_24dp,
+                    context.getString(R.string.telephony_call_stop_ringing),
+                    stopIntent,
+                ).build(),
+            )
+            // Color the action explicitly: some OEM skins otherwise render its text white on
+            // a white pill. onSurface is the near-black body text color in the light theme and
+            // flips to a light tone in dark mode, so the button stays readable either way.
+            // ("colorOnSurface" is not exported in every Material library release's R class,
+            // hence the by-name attribute lookup.)
+            .setColor(actionColor(context))
 
         call.thumbnail?.let { thumbnail ->
             try {
@@ -258,16 +273,19 @@ object MirroredCallSession {
         val notificationId = callNotificationId(sourceDeviceId)
         if (viaTelecomCall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // This notification is the CallStyle counterpart of the telecom call: the system
-            // treats a valid incoming-call notification as the call UI itself and renders it
-            // over the lock screen with answer/decline controls (Android requires one within
-            // 5 s of addNewIncomingCall). A call UI is dismissed through its decline button
-            // rather than by swiping, so it is ongoing - and since answering or declining on
-            // the mirror can only ever close the mirror, both buttons stop it.
+            // treats a valid call notification as the call UI itself and renders it as the
+            // top card (Android requires one within 5 s of addNewIncomingCall), ongoing so
+            // the user dismisses it through its controls rather than by swiping blindly.
+            // forOngoingCall is the form with the fewest controls (a single hangup); the
+            // incoming form adds inert answer/decline buttons which OEMs route to the
+            // telecom connection instead of our PendingIntents. The hangup is wired to the
+            // same stop intent as the action below - Android has no call card without any
+            // buttons at all (android.app.Notification.CallStyle offers only incoming,
+            // ongoing and screening). TODO: real answer/decline needs an own InCallService.
             builder.setStyle(
-                NotificationCompat.CallStyle.forIncomingCall(
+                NotificationCompat.CallStyle.forOngoingCall(
                     Person.Builder().setName(call.displayName).build(),
                     stopMirrorIntent(2),
-                    stopMirrorIntent(3),
                 ),
             )
             builder.setOngoing(true)
@@ -295,11 +313,11 @@ object MirroredCallSession {
             // tapping it opens the call screen without cancelling the notification.
             builder.setStyle(plainStyle)
             builder.setOngoing(false)
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-                // No telecom path available on these versions, so fall back to the full-screen
-                // intent, which opens the call UI while the screen is off or locked.
-                builder.setFullScreenIntent(contentIntent, true)
-            }
+            // The full-screen intent brings our call screen to the front while the screen is
+            // off or locked (the activity sets showWhenLocked). Android 14+ only launches it
+            // automatically with the per-app "full screen notifications" allowance; without
+            // that the notification still rings and tapping it opens the same screen.
+            builder.setFullScreenIntent(contentIntent, true)
             tryNotify(context, notificationId, builder.build())
         }
     }
@@ -342,6 +360,19 @@ object MirroredCallSession {
     }
 
     private fun callNotificationId(deviceId: String): Int = 0x51A00 + (deviceId.hashCode() and 0xFF)
+
+    /**
+     * The Material 3 on-surface text color of the current theme (dark in the light theme,
+     * light in the dark theme), so the notification action stays readable.
+     */
+    private fun actionColor(context: Context): Int {
+        val attr = context.resources.getIdentifier("colorOnSurface", "attr", context.packageName)
+        return if (attr != 0) {
+            MaterialColors.getColor(context, attr, FALLBACK_ACTION_COLOR)
+        } else {
+            FALLBACK_ACTION_COLOR
+        }
+    }
 
     private fun startRingtone(context: Context) {
         stopRingtone()

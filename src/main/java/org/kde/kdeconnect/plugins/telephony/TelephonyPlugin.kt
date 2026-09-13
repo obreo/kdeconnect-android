@@ -103,10 +103,10 @@ class TelephonyPlugin : Plugin() {
     private fun callBroadcastReceived(state: Int, phoneNumber: String?) {
         if (isNumberBlocked(phoneNumber)) return
 
-        // Phones only exchange call events when call mirroring is enabled for this pair;
+        // A phone only receives our call events when we share them with that device;
         // desktops always receive them. Still unmute on ringing, so a ringer muted through
         // KDE Connect doesn't silence a real incoming call when we don't send anything.
-        if (device.deviceType == DeviceType.PHONE && !isCallMirroringEnabled()) {
+        if (device.deviceType == DeviceType.PHONE && !isCallSharingEnabled()) {
             if (state == TelephonyManager.CALL_STATE_RINGING) unmuteRinger()
             return
         }
@@ -284,26 +284,26 @@ class TelephonyPlugin : Plugin() {
         when (np.type) {
             PACKET_TYPE_TELEPHONY_REQUEST_MUTE -> muteRinger()
             PACKET_TYPE_TELEPHONY -> {
-                if (isCallMirroringEnabled()) {
-                    // The sender writes isCancel as a string, but some senders (e.g. the
-                    // desktop) may use a boolean; optString stringifies both to "true".
-                    val isCancel = np.getString("isCancel") == "true"
-                    val event = np.getString("event")
-                    val contactName = np.getStringOrNull("contactName")
-                    val phoneNumber = np.getStringOrNull("phoneNumber")
-                    val thumbnail = np.getStringOrNull("phoneThumbnail")
-                    mainHandler.post {
-                        MirroredCallSession.handleCallEvent(
-                            context,
-                            device.deviceId,
-                            device.name,
-                            event,
-                            isCancel,
-                            contactName,
-                            phoneNumber,
-                            thumbnail,
-                        )
-                    }
+                // Receiving needs no opt-in: sharing is decided solely by the sender's
+                // "Share incoming calls to this device" setting for this pairing.
+                // The sender writes isCancel as a string, but some senders (e.g. the
+                // desktop) may use a boolean; getString stringifies both to "true".
+                val isCancel = np.getString("isCancel") == "true"
+                val event = np.getString("event")
+                val contactName = np.getStringOrNull("contactName")
+                val phoneNumber = np.getStringOrNull("phoneNumber")
+                val thumbnail = np.getStringOrNull("phoneThumbnail")
+                mainHandler.post {
+                    MirroredCallSession.handleCallEvent(
+                        context,
+                        device.deviceId,
+                        device.name,
+                        event,
+                        isCancel,
+                        contactName,
+                        phoneNumber,
+                        thumbnail,
+                    )
                 }
             }
         }
@@ -323,7 +323,7 @@ class TelephonyPlugin : Plugin() {
         return blockedNumbers.split("\n").dropLastWhile { it.isEmpty() }
     }
 
-    private fun isCallMirroringEnabled(): Boolean {
+    private fun isCallSharingEnabled(): Boolean {
         return preferences?.getBoolean(context.getString(R.string.telephony_preference_key_mirror_calls), false) ?: false
     }
 
@@ -361,9 +361,10 @@ class TelephonyPlugin : Plugin() {
          * When the "isCancel" key is set (to the string "true"), this packet repeats a previous
          * event and announces that the call it refers to is over.
          *
-         * Android phones also receive this packet type, to mirror incoming calls of the paired
-         * device (see "Mirror incoming calls" in the plugin settings): a "ringing" event starts
-         * the mirror, and either a "talking" or a cancelled event ends it.
+         * Android phones also receive this packet type, to mirror incoming calls of a paired
+         * device which shares them (see "Share incoming calls to this device" in the plugin
+         * settings of the sharing phone): a "ringing" event starts the mirror, and either a
+         * "talking" or a cancelled event ends it.
          */
         const val PACKET_TYPE_TELEPHONY: String = "kdeconnect.telephony"
 

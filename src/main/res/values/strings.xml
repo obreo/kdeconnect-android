@@ -400,7 +400,7 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
     <string name="share_notifications_explanation">To see the progress when sending and receiving files you need to allow notifications</string>
     <string name="telepathy_permission_explanation">To read and write SMS from your desktop you need to give permission to SMS</string>
     <string name="telephony_permission_explanation">To see phone calls on the desktop you need to give permission to phone call logs and phone state</string>
-    <string name="telephony_optional_permission_explanation">To see a contact name instead of a phone number you need to give access to the phone\'s contacts. To show mirrored incoming calls you need to allow notifications</string>
+    <string name="telephony_optional_permission_explanation">To see a contact name instead of a phone number you need to give access to the phone\'s contacts. To show incoming calls shared with this phone you need to allow notifications</string>
     <string name="contacts_permission_explanation">To share your contacts book with the desktop, you need to give contacts permission</string>
     <string name="contacts_per_device_confirmation">Your phone contacts will be copied over to this device, so they can be used by the KDE Connect SMS app and other apps.</string>
 
@@ -408,8 +408,8 @@ SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted
     <string name="telephony_pref_blocked_title">Blocked numbers</string>
     <string name="telephony_pref_blocked_dialog_desc">Don\'t show calls and SMS from these numbers. Please specify one number per line</string>
     <string name="telephony_preference_key_mirror_calls" translatable="false">telephony_mirror_calls</string>
-    <string name="telephony_pref_mirror_calls_title">Mirror incoming calls</string>
-    <string name="telephony_pref_mirror_calls_summary">Mirror calls with this device: both phones ring when either receives a call. Answer or reject on the phone with the SIM. Enable on both devices.</string>
+    <string name="telephony_pref_mirror_calls_title">Share incoming calls to this phone</string>
+    <string name="telephony_pref_mirror_calls_summary">Phone-to-phone feature: send this phone\'s incoming calls to this paired phone, which then rings as if the call came in. The receiving phone only needs the Telephony plugin enabled, no setting of its own. Answer or reject calls on this phone.</string>
     <string name="telephony_call_incoming">Incoming call</string>
     <string name="telephony_call_via">via %1$s</string>
     <string name="telephony_call_stop_ringing">Stop ringing</string>

@@ -63,8 +63,10 @@ class TelephonyCallActivity : BaseActivity<ActivityTelephonyCallBinding>() {
 
         binding.bStopRinging.setOnClickListener {
             // Local-only: stops the ringtone and hides the notification, the real call
-            // keeps ringing on the device which received it.
-            plugin?.stopCallMirror(recordMissed = true)
+            // keeps ringing on the device which received it. Go straight to the session:
+            // the plugin instance may have been replaced by a link reconnect since this
+            // screen opened, and the button must keep working.
+            deviceId?.let { MirroredCallSession.stop(this, it, recordMissed = true) }
         }
 
         showCall(
